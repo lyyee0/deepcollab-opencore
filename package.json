@@ -1,0 +1,37 @@
+{
+  "name": "deepcollab-opencore",
+  "version": "1.0.0",
+  "description": "非破坏性 AI 安全合规审计的举证与验证框架：事件流格式、哈希链与签名、可信时间戳、脱敏、工具网关策略骨架",
+  "private": true,
+  "author": "柳依",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "deepcollab-verify": "tools/verify.mjs"
+  },
+  "scripts": {
+    "verify": "node tools/verify.mjs",
+    "verify:stream": "node tools/verify-stream.mjs examples/demo-event-stream.jsonl",
+    "demo": "node examples/run-demo.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lyyee0/deepcollab-opencore.git"
+  },
+  "homepage": "https://github.com/lyyee0/deepcollab-opencore",
+  "bugs": {
+    "url": "https://github.com/lyyee0/deepcollab-opencore/issues"
+  },
+  "keywords": [
+    "audit",
+    "ai-security",
+    "event-sourcing",
+    "hash-chain",
+    "ed25519",
+    "rfc3161",
+    "compliance"
+  ]
+}

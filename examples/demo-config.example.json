@@ -1,0 +1,9 @@
+{
+  "_说明": "示例配置。run-demo.mjs 会在同目录下读它；字段缺失时用默认值。全部是合成值。",
+  "roe": {
+    "maxRequestsPerSession": 500,
+    "requestsPerMinute": 60,
+    "_说明": "RoE 预算闸的硬上限。demo_batch 要 count=900，所以会被执行前的预扣拒掉 —— 这是刻意的。"
+  },
+  "demoRoot": "demo-root"
+}
