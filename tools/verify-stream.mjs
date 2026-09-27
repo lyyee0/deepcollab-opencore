@@ -7,13 +7,14 @@
 //                     对应的是「有人把一整套证明材料交给了你」。
 //   verify-stream.mjs 只校验事件流本身的哈希链，不需要信任包，适合「我手上就有一份 events.jsonl」。
 //
-// 用法: node tools/verify-stream.mjs <事件流路径> [--pubkey <ed25519:…>] [--json]
+// 用法: node tools/verify-stream.mjs <事件流路径> [--pubkey <ed25519:keyId|base64-SPKI>] [--json]
 // 退出码: 0 = 链完整；2 = 存在问题；1 = 读不到或用法错误。
 
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { verifyEventChain, formatVerification } from '../src/audit-chain.mjs';
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = { json: false, file: null, pubkey: null };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -25,18 +26,28 @@ function parseArgs(argv) {
   return options;
 }
 
-let options;
-try { options = parseArgs(process.argv.slice(2)); }
-catch (error) { console.error(error.message); process.exit(1); }
-if (!options.file) {
-  console.error('用法: node tools/verify-stream.mjs <事件流路径> [--pubkey <ed25519:…>] [--json]');
-  process.exit(1);
+export async function verifyStreamFile(file, pubkey = null) {
+  return verifyEventChain(resolve(file), { pinnedPublicKey: pubkey });
 }
-try {
-  const result = await verifyEventChain(resolve(options.file), { pinnedPublicKey: options.pubkey });
-  console.log(options.json ? JSON.stringify(result, null, 2) : formatVerification(result));
-  if (!result.ok) process.exitCode = 2;
-} catch (error) {
-  console.error('校验无法完成：' + error.message);
-  process.exitCode = 1;
+
+export async function main(argv = process.argv.slice(2)) {
+  let options;
+  try { options = parseArgs(argv); }
+  catch (error) { console.error(error.message); return 1; }
+  if (!options.file) {
+    console.error('用法: node tools/verify-stream.mjs <事件流路径> [--pubkey <ed25519:keyId|base64-SPKI>] [--json]');
+    return 1;
+  }
+  try {
+    const result = await verifyStreamFile(options.file, options.pubkey);
+    console.log(options.json ? JSON.stringify(result, null, 2) : formatVerification(result));
+    return result.ok ? 0 : 2;
+  } catch (error) {
+    console.error('校验无法完成：' + error.message);
+    return 1;
+  }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = await main();
 }

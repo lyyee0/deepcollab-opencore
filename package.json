@@ -15,7 +15,8 @@
   "scripts": {
     "verify": "node tools/verify.mjs",
     "verify:stream": "node tools/verify-stream.mjs examples/demo-event-stream.jsonl",
-    "demo": "node examples/run-demo.mjs"
+    "demo": "node examples/run-demo.mjs",
+    "test": "node --test"
   },
   "repository": {
     "type": "git",

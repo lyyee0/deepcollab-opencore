@@ -16,7 +16,8 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
+import { assertPathWithin } from './local-paths.mjs';
 import { sanitizeValue } from './redact.mjs';
 import { createRequestBudget } from './budget.mjs';
 
@@ -109,7 +110,7 @@ export class ToolGateway {
     // 该记路径的记路径、该记哈希的记哈希，但**不记内容**。
     await this.store.append({ ...base, type: 'tool.action_requested', payload: {
       ...payloadBase,
-      arguments: adapter.audit ? adapter.audit(args) : sanitizeValue(args),
+      arguments: sanitizeValue(adapter.audit ? adapter.audit(args) : args),
       risk: adapter.risk || 'local',
       effects: adapter.effects || [],
       request_cost: cost,
@@ -127,7 +128,7 @@ export class ToolGateway {
         elapsedMs: Date.now() - started,
         request_cost: cost,
         roe: roeAfter,
-        outcome: adapter.auditResult ? adapter.auditResult(result) : sanitizeValue(result),
+        outcome: sanitizeValue(adapter.auditResult ? adapter.auditResult(result) : result),
       } });
       return { actionId, modelToolCallId: request.modelToolCallId, result };
     } catch (error) {
@@ -144,10 +145,8 @@ export class ToolGateway {
 // 路径必须在给定根目录之内。这是适配器自己该做的事：
 // 网关不知道每个工具的参数语义，参数复验只能由适配器负责。
 function resolveInside(root, relative) {
-  const target = resolve(root, String(relative || ''));
-  const base = resolve(root);
-  if (target !== base && !target.startsWith(base + sep)) throw gatewayError('DEMO_PATH_DENIED', '路径越出了示例根目录: ' + relative);
-  return target;
+  try { return assertPathWithin(root, resolve(root, String(relative || ''))); }
+  catch { throw gatewayError('DEMO_PATH_DENIED', '路径越出了示例根目录（含符号链接或 junction）: ' + relative); }
 }
 
 export function demoAdapters({ demoRoot }) {

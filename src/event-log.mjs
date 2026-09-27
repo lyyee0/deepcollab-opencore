@@ -29,10 +29,10 @@ function validateEventInput(input) {
   }
 }
 
-async function readEventFile(path) {
+async function readEventFile(path, allowedRoot = null) {
   let text = '';
   try {
-    text = await readFile(assertLocalPath(path), 'utf8');
+    text = await readFile(assertLocalPath(path, allowedRoot), 'utf8');
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
@@ -74,13 +74,14 @@ function legacyProjection(context) {
 export class EventStore {
   constructor({ eventPath, projectionPath, compatibilityProjectionPath = null, writeFormat = 'native-v2', lockTimeoutMs = 3000, staleLockMs = 30000, reducers = [],
     chainEnabled = true, auditCheckpointEvery = 0, auditKeyEnv = 'DEEPCOLLAB_AUDIT_KEY', auditEnvironment = process.env,
-    auditTimestamp = null, auditSignal = null }) {
-    this.eventPath = assertLocalPath(eventPath);
-    this.projectionPath = assertLocalPath(projectionPath);
-    this.compatibilityProjectionPath = compatibilityProjectionPath ? assertLocalPath(compatibilityProjectionPath) : null;
+    auditTimestamp = null, auditSignal = null, allowedRoot = null }) {
+    this.allowedRoot = allowedRoot;
+    this.eventPath = assertLocalPath(eventPath, allowedRoot);
+    this.projectionPath = assertLocalPath(projectionPath, allowedRoot);
+    this.compatibilityProjectionPath = compatibilityProjectionPath ? assertLocalPath(compatibilityProjectionPath, allowedRoot) : null;
     if (!['native-v2', 'shared-v1'].includes(writeFormat)) throw new Error('事件写入格式必须为 native-v2 或 shared-v1');
     this.writeFormat = writeFormat;
-    this.lockPath = `${eventPath}.lock`;
+    this.lockPath = assertLocalPath(`${eventPath}.lock`, allowedRoot);
     this.lockTimeoutMs = lockTimeoutMs;
     this.staleLockMs = staleLockMs;
     this.reducers = reducers;
@@ -217,7 +218,7 @@ export class EventStore {
   async appendDerived(build) {
     await this.ensure();
     return this.withLock(async () => {
-      const snapshot = await readEventFile(this.eventPath);
+      const snapshot = await readEventFile(this.eventPath, this.allowedRoot);
       const input = await build(snapshot);
       if (!input) return null;
       const chained = await this.chainFor([this.make(input)]);
@@ -227,7 +228,7 @@ export class EventStore {
     });
   }
   async read() {
-    return readEventFile(this.eventPath);
+    return readEventFile(this.eventPath, this.allowedRoot);
   }
 
   async importFile(sourcePath) {
@@ -243,7 +244,7 @@ export class EventStore {
     let imported = 0;
     let duplicates = 0;
     await this.withLock(async () => {
-      const current = await readEventFile(this.eventPath);
+      const current = await readEventFile(this.eventPath, this.allowedRoot);
       if (current.broken.length) throw Object.assign(new Error('目标事件流含损坏行，已拒绝导入'), { code: 'AUDIT_CORRUPT' });
       const ids = new Set(current.events.map(event => event.id));
       const fresh = [];

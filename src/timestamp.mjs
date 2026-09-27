@@ -309,7 +309,9 @@ export function parseTimestampToken(token, { expectedImprint = null, pinnedFinge
   const pinMatches = pinnedFingerprint ? signer?.fingerprint === normalizeFingerprint(pinnedFingerprint) : null;
 
   const selfSigned = x509.find(entry => entry.certificate.subject === entry.certificate.issuer) || null;
-  const ok = signatureValid && digestMatches && imprintMatches !== false && pinMatches !== false;
+  const expectedImprintPresent = typeof expectedImprint === 'string'
+    && /^[0-9a-f]{64}$/i.test(expectedImprint.replace(/^0x/, ''));
+  const ok = signatureValid && digestMatches && expectedImprintPresent && imprintMatches === true && pinMatches !== false;
 
   return {
     ok,
@@ -319,7 +321,7 @@ export function parseTimestampToken(token, { expectedImprint = null, pinnedFinge
     imprintAlgorithm, imprint: imprint.toString('hex'),
     nonce: nonceTlv ? nonceTlv.content.toString('hex') : null,
     signatureAlgorithm: signatureOid,
-    verified: { signature: signatureValid, messageDigest: digestMatches, imprint: imprintMatches, pinned: pinMatches },
+    verified: { signature: signatureValid, messageDigest: digestMatches, imprint: imprintMatches, expectedImprint: expectedImprintPresent, pinned: pinMatches },
     signer: signer ? {
       subject: signer.certificate.subject, issuer: signer.certificate.issuer,
       serialNumber: signer.certificate.serialNumber, fingerprint256: signer.fingerprint,

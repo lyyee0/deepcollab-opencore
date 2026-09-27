@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertLocalPath } from '../src/local-paths.mjs';
 import { canonicalJson } from '../src/canonical.mjs';
 import { publicKeyFromSpki, sha256Hex, verifyEventChain, verifyPayload } from '../src/audit-chain.mjs';
 import { verifyTimestampToken } from '../src/timestamp.mjs';
@@ -38,15 +39,20 @@ export async function verifyTrustPackage(packageDir, options = {}) {
       .filter(Boolean);
     const mismatched = [];
     const missing = [];
+    const denied = [];
     let checked = 0;
     for (const row of rows) {
-      const bytes = await readIfPresent(join(dir, row.file));
+      let packageFile;
+      try { packageFile = assertLocalPath(resolve(dir, row.file), dir); }
+      catch { denied.push(row.file); continue; }
+      const bytes = await readIfPresent(packageFile);
       if (bytes === null) { missing.push(row.file); continue; }
       checked += 1;
       if (sha256Hex(bytes) !== row.hash) mismatched.push(row.file);
     }
     if (mismatched.length) fail('PACKAGE_SUMS_MISMATCH', '包内有 ' + mismatched.length + ' 个文件的哈希与 SHA256SUMS.txt 不一致', mismatched.slice(0, 8));
     else if (missing.length) fail('PACKAGE_SUMS_MISSING_FILE', 'SHA256SUMS.txt 列出的 ' + missing.length + ' 个文件不存在', missing.slice(0, 8));
+    else if (denied.length) fail('PACKAGE_PATH_DENIED', 'SHA256SUMS.txt 中有路径逃出信任包真实目录', denied.slice(0, 8));
     else pass('PACKAGE_SUMS', '包内 ' + checked + ' 个文件与 SHA256SUMS.txt 一致');
   }
 
@@ -74,18 +80,32 @@ export async function verifyTrustPackage(packageDir, options = {}) {
   }
 
   // 3) 清单签名（可离线完成，不需要事件流）
-  const keysById = new Map((core.signingKeys || []).map(item => [item.keyId, item]));
+  const keysById = new Map();
+  const declaredKeys = [];
+  for (const item of (core.signingKeys || [])) {
+    const declaredId = String(item?.keyId || '');
+    try {
+      const parsed = publicKeyFromSpki(item.publicKeySpki);
+      declaredKeys.push({ declaredId, recomputedId: parsed.keyId });
+      if (declaredId !== parsed.keyId) {
+        fail('SIGNING_KEY_ID_MISMATCH', '包内声明的 keyId 与公钥重算值不一致', { declaredId, recomputedId: parsed.keyId });
+      }
+      keysById.set(parsed.keyId, { ...item, keyId: parsed.keyId, publicKey: parsed.key });
+    } catch (error) {
+      fail('SIGNING_KEY_INVALID', '包内签名公钥无法解析', { declaredId, message: error.message });
+    }
+  }
   let pinnedKey = null;
   if (options.expectSigningKey) {
     const wanted = String(options.expectSigningKey).trim();
-    if (keysById.has(wanted)) { pinnedKey = keysById.get(wanted); pass('SIGNING_KEY_PINNED', '清单使用了外部固定的签名密钥 ' + wanted); }
-    else fail('SIGNING_KEY_MISMATCH', '包内没有外部固定的签名密钥 ' + wanted, [...keysById.keys()]);
+    if (keysById.has(wanted)) { pinnedKey = keysById.get(wanted); pass('SIGNING_KEY_PINNED', '重算后的公钥 keyId 与外部固定值一致：' + wanted); }
+    else fail('SIGNING_KEY_MISMATCH', '包内公钥重算 keyId 后没有外部固定的签名密钥 ' + wanted, { expectedId: wanted, keys: declaredKeys });
   }
   if (signature) {
     const holder = pinnedKey || keysById.get(signature.keyId);
     if (!holder) fail('SIGNING_KEY_UNKNOWN', '清单签名引用了包内不存在的密钥 ' + signature.keyId);
     else {
-      const publicKey = publicKeyFromSpki(holder.publicKeySpki).key;
+      const publicKey = holder.publicKey || publicKeyFromSpki(holder.publicKeySpki).key;
       if (verifyPayload(publicKey, core, signature.value)) pass('BUNDLE_SIGNATURE', '清单签名有效（' + signature.keyId + '）');
       else fail('BUNDLE_SIGNATURE_INVALID', '清单签名校验失败：清单内容与签名不匹配');
     }
@@ -110,16 +130,24 @@ export async function verifyTrustPackage(packageDir, options = {}) {
     if (row.signed && row.signature) {
       const holder = keysById.get(row.keyId);
       if (!holder) checkpointProblems.push('检查点 #' + row.coversSeq + '：包内缺少密钥 ' + row.keyId);
-      else if (verifyPayload(publicKeyFromSpki(holder.publicKeySpki).key, payload, row.signature)) signedOk += 1;
+      else if (verifyPayload(holder.publicKey || publicKeyFromSpki(holder.publicKeySpki).key, payload, row.signature)) signedOk += 1;
       else checkpointProblems.push('检查点 #' + row.coversSeq + '：签名校验失败');
     }
     const stamp = row.timestamp;
     if (stamp && stamp.tokenFile) {
-      const token = await readIfPresent(join(dir, stamp.tokenFile));
+      let tokenPath;
+      try { tokenPath = assertLocalPath(resolve(dir, stamp.tokenFile), dir); }
+      catch { checkpointProblems.push('检查点 #' + row.coversSeq + '：时间戳令牌路径越出信任包目录 ' + stamp.tokenFile); continue; }
+      const token = await readIfPresent(tokenPath);
       if (!token) checkpointProblems.push('检查点 #' + row.coversSeq + '：缺少令牌文件 ' + stamp.tokenFile);
       else {
+        const expectedImprint = sha256Hex(Buffer.from(canonicalJson(payload), 'utf8'));
+        if (stamp.imprint && stamp.imprint.toLowerCase() !== expectedImprint) {
+          checkpointProblems.push('检查点 #' + row.coversSeq + '：包内时间戳 imprint 与检查点载荷重算值不一致');
+          continue;
+        }
         const parsed = verifyTimestampToken(token, {
-          expectedImprint: stamp.imprint || null,
+          expectedImprint,
           pinnedFingerprint: options.expectTsa || null,
         });
         if (parsed.ok) timestampOk += 1;
@@ -142,9 +170,16 @@ export async function verifyTrustPackage(packageDir, options = {}) {
   }
 
   // 5) 事件流与哈希链（需要证据副本；没有就只能验到上一步）
-  const evidencePath = options.evidence
+  let evidencePath = options.evidence
     ? resolve(options.evidence)
     : (core.scope && core.scope.evidence && core.scope.evidence.included ? join(dir, core.scope.evidence.path) : null);
+  if (!options.evidence && evidencePath) {
+    try { evidencePath = assertLocalPath(resolve(dir, core.scope.evidence.path), dir); }
+    catch {
+      fail('EVIDENCE_PATH_DENIED', '清单中的事件流路径越出信任包目录');
+      evidencePath = null;
+    }
+  }
   if (!evidencePath) {
     warn('EVIDENCE_ABSENT', '本包未包含事件流副本，且未提供 --evidence；哈希链本身未能校验');
   } else {
@@ -163,11 +198,14 @@ export async function verifyTrustPackage(packageDir, options = {}) {
       if (chain.ok) pass('EVENT_CHAIN', '事件流哈希链完整：' + chain.chained + ' 条链式事件' + (chain.legacy ? '，创世锚点覆盖 ' + chain.legacy + ' 条历史事件' : ''));
       else fail('EVENT_CHAIN_BROKEN', '事件流哈希链存在问题', chain.problems.slice(0, 8));
       if (chain.anchor && !chain.anchorVerified) fail('ANCHOR_MISMATCH', '创世锚点不匹配：建链前的历史内容已被改动');
-      if (core.scope.headSeq === chain.chained && core.scope.headHash
+      if (core.scope.headSeq === chain.chained && core.scope.headHash === chain.headHash
         && (chain.problems.length === 0 || chain.problems.every(problem => problem.severity === 'warning'))) {
         pass('HEAD_MATCH', '清单记录的链头与事件流一致（第 ' + core.scope.headSeq + ' 条）');
-      } else if (chain.chained !== core.scope.headSeq) {
-        fail('HEAD_MISMATCH', '清单声明的链式事件数 ' + core.scope.headSeq + ' 与实际 ' + chain.chained + ' 不一致');
+      } else {
+        fail('HEAD_MISMATCH', '清单声明的链头与事件流实际链头不一致', {
+          expectedSeq: core.scope.headSeq ?? null, actualSeq: chain.chained,
+          expectedHash: core.scope.headHash ?? null, actualHash: chain.headHash ?? null,
+        });
       }
       const anchor = core.scope.genesisAnchor;
       if (anchor) {
