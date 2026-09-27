@@ -1,0 +1,14 @@
+# 行尾一律 LF。
+#
+# 这个仓库的价值建立在「按字节可比对」上：事件流、哈希链、签名、检查点摘要都按字节计算，
+# 让 git 按平台改写行尾，只会制造出没人想要的差异 —— 而那种差异看起来和篡改一模一样。
+* text=auto eol=lf
+
+# 二进制：任何文本转换都不要做。
+*.tsr binary
+*.p12 binary
+*.pfx binary
+*.png binary
+*.jpg binary
+*.zip binary
+*.gz binary
