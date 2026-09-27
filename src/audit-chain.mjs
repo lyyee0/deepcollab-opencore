@@ -354,9 +354,9 @@ export async function appendCheckpoint(store, { reason = 'manual', keyEnv = DEFA
 export function verifyChainEvents(events, { pinnedPublicKey = null, pinnedTsaCert = null } = {}) {
   const chained = events.filter(event => chainOf(event));
   const result = {
-    chained: chained.length, legacy: events.length - chained.length,
+    chained: chained.length, legacy: 0,
     checkpoints: 0, signedCheckpoints: 0, unsignedCheckpoints: 0,
-    verifiedSignatures: 0, keyIds: [], anchor: null, problems: [], ok: true,
+    verifiedSignatures: 0, keyIds: [], anchor: null, headHash: null, problems: [], ok: true,
   };
   // 导入事件带着合法的链，光验链分辨不出来。必须单独统计，否则一份伪造的 JSONL
   // 导入之后就再也认不出来了 —— 那等于把"每条链上事件都是可信事实"这个前提作废。
@@ -371,10 +371,28 @@ export function verifyChainEvents(events, { pinnedPublicKey = null, pinnedTsaCer
     });
   }
   if (!chained.length) {
-    result.ok = true;
-    result.note = '事件流尚未建立哈希链（历史数据或链被关闭）。';
+    result.legacy = events.length;
+    result.ok = false;
+    result.note = '事件流尚未建立哈希链，无法验证完整性。';
+    result.problems.push({ code: 'AUDIT_CHAIN_NOT_ESTABLISHED', message: result.note });
     return result;
   }
+  const chainedIndexes = events.map((event, index) => chainOf(event) ? index : -1).filter(index => index >= 0);
+  const firstChainedIndex = chainedIndexes[0];
+  const lastChainedIndex = chainedIndexes[chainedIndexes.length - 1];
+  for (let index = 0; index < events.length; index += 1) {
+    if (chainOf(events[index])) continue;
+    if (index < firstChainedIndex) { result.legacy += 1; continue; }
+    const suffix = index > lastChainedIndex;
+    result.problems.push({
+      code: suffix ? 'AUDIT_UNCHAINED_SUFFIX' : 'AUDIT_UNCHAINED_GAP',
+      message: suffix
+        ? '哈希链起点之后出现未建链事件；只有链条起点之前的事件可作为历史内容。'
+        : '哈希链内部出现未建链事件。',
+    });
+    result.ok = false;
+  }
+  result.headHash = chainOf(chained[chained.length - 1])?.hash || null;
   let expectedSeq = 1;
   let prev = GENESIS;
   // shared-v1 的链在 meta.chain，native-v2 在顶层；统一用 chainOf 取，不能直接读 event.chain。
@@ -432,9 +450,35 @@ export function verifyChainEvents(events, { pinnedPublicKey = null, pinnedTsaCer
       result.signedCheckpoints += 1;
       let publicKey = null;
       let source = 'embedded';
-      if (pinnedPublicKey) {
+      if (typeof pinnedPublicKey === 'string' && pinnedPublicKey.startsWith(SIGNATURE_ALGORITHM + ':')) {
+        let embedded;
+        try { embedded = payload.public_key ? publicKeyFromSpki(payload.public_key) : null; } catch { embedded = null; }
+        if (!embedded || embedded.keyId !== pinnedPublicKey) {
+          result.problems.push({ seq: chain.seq, code: 'AUDIT_KEY_MISMATCH', message: '事件流公钥重算 keyId 为 ' + (embedded?.keyId || '不可用') + '，与固定 keyId ' + pinnedPublicKey + ' 不一致' });
+          result.ok = false;
+          previousCheckpoint = checkpoint;
+          continue;
+        }
+        publicKey = embedded.key; source = 'pinned-key-id';
+      } else if (typeof pinnedPublicKey === 'string') {
+        try {
+          const parsedPinned = publicKeyFromSpki(pinnedPublicKey);
+          if (parsedPinned.keyId !== checkpoint.key_id) {
+            result.problems.push({ seq: chain.seq, code: 'AUDIT_KEY_MISMATCH', message: '固定公钥重算 keyId 为 ' + parsedPinned.keyId + '，事件流声明 ' + checkpoint.key_id });
+            result.ok = false;
+            previousCheckpoint = checkpoint;
+            continue;
+          }
+          publicKey = parsedPinned.key; source = 'pinned';
+        } catch {
+          result.problems.push({ seq: chain.seq, code: 'AUDIT_KEY_INVALID', message: '固定公钥无法解析；提供 ed25519:keyId 或 base64 SPKI 公钥' });
+          result.ok = false;
+          previousCheckpoint = checkpoint;
+          continue;
+        }
+      } else if (pinnedPublicKey) {
         if (pinnedPublicKey.keyId !== checkpoint.key_id) {
-          result.problems.push({ seq: chain.seq, code: 'AUDIT_KEY_MISMATCH', message: '检查点使用了 ' + checkpoint.key_id + '，与固定公钥 ' + pinnedPublicKey.keyId + ' 不一致' });
+          result.problems.push({ seq: chain.seq, code: 'AUDIT_KEY_MISMATCH', message: '检查点声明 keyId ' + checkpoint.key_id + '，与固定公钥 keyId ' + (pinnedPublicKey.keyId || '[未知 keyId]') + ' 不一致' });
           result.ok = false;
           previousCheckpoint = checkpoint;
           continue;
@@ -492,7 +536,7 @@ export function verifyChainEvents(events, { pinnedPublicKey = null, pinnedTsaCer
 // 文件级校验：额外比对创世锚点，确认"建链之前的历史内容"没有被改动。
 export async function verifyEventChain(path, { pinnedPublicKey = null, pinnedTsaCert = null } = {}) {
   const info = await stat(path).catch(() => null);
-  if (!info) return { ok: true, events: 0, chained: 0, legacy: 0, checkpoints: 0, signedCheckpoints: 0, unsignedCheckpoints: 0, verifiedSignatures: 0, keyIds: [], problems: [], note: '事件流文件不存在。' };
+  if (!info) return { ok: false, events: 0, chained: 0, legacy: 0, checkpoints: 0, signedCheckpoints: 0, unsignedCheckpoints: 0, verifiedSignatures: 0, keyIds: [], problems: [{ code: 'AUDIT_CHAIN_FILE_MISSING', message: '事件流文件不存在，无法验证。' }], note: '事件流文件不存在。' };
   if (info.size > MAX_VERIFY_BYTES) throw chainError('AUDIT_CHAIN_TOO_LARGE', '事件流超过 ' + (MAX_VERIFY_BYTES / 1024 / 1024) + ' MiB，请分段后校验');
   const buffer = await readFile(path);
   const text = buffer.toString('utf8');

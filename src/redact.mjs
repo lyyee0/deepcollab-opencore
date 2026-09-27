@@ -170,5 +170,5 @@ export function sanitizeValue(value) {
   if (Array.isArray(value)) return value.map(sanitizeValue);
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
-    /^(authorization|api[_-]?key|password|secret|access_token|refresh_token)$/i.test(key) ? '[REDACTED]' : sanitizeValue(item)]));
+    isCredentialFieldName(key) ? '[REDACTED]' : sanitizeValue(item)]));
 }

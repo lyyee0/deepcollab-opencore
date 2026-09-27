@@ -43,7 +43,7 @@ const demoRoot = join(workspace, config.demoRoot || 'demo-root');
 
 console.log('工作区: ' + workspace);
 
-const store = new EventStore({ eventPath, projectionPath });
+const store = new EventStore({ eventPath, projectionPath, allowedRoot: workspace });
 const sessionId = 'demo-session';
 const runId = 'demo-run';
 

@@ -29,6 +29,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
+      - name: Run regression tests
+        run: npm test
+
       - name: Run offline demo
         run: npm run demo
 
