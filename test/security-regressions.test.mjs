@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash, createPrivateKey } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,6 +32,14 @@ test('P0-1 verify-stream-file-missing fails closed', async () => {
   const result = await verifyEventChain(join(root, 'missing.jsonl'));
   assert.equal(result.ok, false);
   assert.ok(result.problems.some(problem => problem.code === 'AUDIT_CHAIN_FILE_MISSING'));
+});
+
+test('P0-1 verify-stream CLI reports AUDIT_STREAM_MISSING and exits 1 for a missing file', async () => {
+  const root = await tempDir();
+  const missing = join(root, 'missing.jsonl');
+  const result = spawnSync(process.execPath, [join(ROOT, '..', 'tools', 'verify-stream.mjs'), missing], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /AUDIT_STREAM_MISSING/);
 });
 
 test('P0-2 valid chain plus trailing garbage is rejected', async () => {

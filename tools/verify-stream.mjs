@@ -27,7 +27,11 @@ export function parseArgs(argv) {
 }
 
 export async function verifyStreamFile(file, pubkey = null) {
-  return verifyEventChain(resolve(file), { pinnedPublicKey: pubkey });
+  const result = await verifyEventChain(resolve(file), { pinnedPublicKey: pubkey });
+  if (result.problems?.some(problem => problem.code === 'AUDIT_CHAIN_FILE_MISSING')) {
+    return { ...result, code: 'AUDIT_STREAM_MISSING' };
+  }
+  return result;
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -40,10 +44,16 @@ export async function main(argv = process.argv.slice(2)) {
   }
   try {
     const result = await verifyStreamFile(options.file, options.pubkey);
+    if (result.code === 'AUDIT_STREAM_MISSING') {
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else console.error('AUDIT_STREAM_MISSING: ' + result.problems.find(problem => problem.code === 'AUDIT_CHAIN_FILE_MISSING').message);
+      return 1;
+    }
     console.log(options.json ? JSON.stringify(result, null, 2) : formatVerification(result));
     return result.ok ? 0 : 2;
   } catch (error) {
-    console.error('校验无法完成：' + error.message);
+    const code = error.code === 'ENOENT' ? 'AUDIT_STREAM_MISSING' : 'AUDIT_STREAM_READ_FAILED';
+    console.error(code + ': ' + error.message);
     return 1;
   }
 }

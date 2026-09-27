@@ -1,6 +1,6 @@
 {
   "name": "deepcollab-opencore",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "非破坏性 AI 安全合规审计的举证与验证框架：事件流格式、哈希链与签名、可信时间戳、脱敏、工具网关策略骨架",
   "private": true,
   "author": "柳依",
